@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>CYBERDUNE CLUB — Game</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Inter,system-ui,Arial,sans-serif;background:#000;color:#fff;overflow-x:hidden}
+  #matrix{position:fixed;inset:0;width:100%;height:100%;z-index:0;mix-blend-mode:screen;opacity:0.8}
+  .wrap{position:relative;z-index:2;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:40px 20px}
+  .card{background:rgba(10,10,10,0.6);backdrop-filter:blur(12px);padding:30px;border-radius:12px;text-align:center;max-width:680px;width:100%;box-shadow:0 0 40px rgba(225,6,0,0.45);transform:scale(0);animation:popCard .5s forwards}
+  @keyframes popCard{to{transform:scale(1)}}
+  .logo{width:140px;margin:0 auto 18px;display:block}
+  h1{font-size:2rem;color:#e10600;margin-bottom:8px;text-shadow:0 0 12px rgba(225,6,0,0.5)}
+  p.lead{color:#ddd;margin-bottom:18px}
+  .game{display:grid;grid-template-columns:repeat(2,160px);grid-gap:12px;justify-content:center;margin:18px auto}
+  .pad{width:160px;height:100px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:20px;cursor:pointer;user-select:none;box-shadow:0 6px 18px rgba(0,0,0,0.6)}
+  .pad.red{background:#b30e0e}
+  .pad.green{background:#0e7b3d}
+  .pad.blue{background:#0e4fb3}
+  .pad.yellow{background:#b38f0e}
+  .pad.disabled{opacity:.45;pointer-events:none}
+  .controls{margin-top:16px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .btn{background:#e10600;border:none;padding:10px 16px;border-radius:6px;color:#fff;cursor:pointer;font-weight:700}
+  .info{margin-top:12px;color:#cfcfcf}
+  #flag{display:none;margin-top:14px;color:#7fff7f;font-weight:800;word-break:break-all}
+  .small{font-size:0.9rem;color:#bbb}
+  @media(max-width:520px){
+    .game{grid-template-columns:repeat(2,140px)}
+    .pad{width:140px;height:88px;font-size:18px}
+  }
+</style>
+</head>
+<body>
+<canvas id="matrix"></canvas>
+
+<div class="wrap">
+  <div class="card" role="main" aria-labelledby="title">
+    <img src="logo.webp" alt="CYBERDUNE Logo" class="logo">
+    <h1 id="title">Welcome to Game — CYBERDUNE</h1>
+    <p class="lead">A little easy challenge: repeat the color sequence. Complete 3 rounds to reveal the prize.</p>
+
+    <div id="gameArea" aria-hidden="false">
+      <div class="game" id="pads">
+        <div class="pad red" data-idx="0">RED</div>
+        <div class="pad green" data-idx="1">GREEN</div>
+        <div class="pad blue" data-idx="2">BLUE</div>
+        <div class="pad yellow" data-idx="3">YELLOW</div>
+      </div>
+
+      <div class="controls">
+        <button class="btn" id="startBtn">Start Game</button>
+        <button class="btn" id="restartBtn" style="background:#444">Restart</button>
+      </div>
+
+      <div class="info small" id="status">Press <strong>Start Game</strong> to begin. You must finish 3 sequences to win.</div>
+      <div id="flag" aria-live="polite"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- Matrix effect ----------
+const canvas = document.getElementById('matrix');
+const ctx = canvas.getContext('2d');
+let W,H,cols,ypos=[];
+const colorChar = '#e10600';
+const chars = '01!@#$%^&*()=<>/[]{}ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz▒▓░█';
+function init(){ W=canvas.width=window.innerWidth; H=canvas.height=window.innerHeight; cols=Math.floor(W/14)+1; ypos=Array(cols).fill(0); }
+window.addEventListener('resize', init); init();
+function drawMatrix(){
+  ctx.fillStyle='rgba(0,0,0,0.15)';
+  ctx.fillRect(0,0,W,H);
+  ctx.fillStyle=colorChar;
+  ctx.font='14px monospace';
+  for(let i=0;i<cols;i++){
+    const ch = chars.charAt(Math.floor(Math.random()*chars.length));
+    ctx.fillText(ch, i*14, ypos[i]*14);
+    ypos[i] = (ypos[i]*14 > H && Math.random()>0.975) ? 0 : ypos[i]+1;
+  }
+  requestAnimationFrame(drawMatrix);
+}
+drawMatrix();
+
+// ---------- Simple Simon-like game ----------
+const pads = Array.from(document.querySelectorAll('.pad'));
+const startBtn = document.getElementById('startBtn');
+const restartBtn = document.getElementById('restartBtn');
+const statusEl = document.getElementById('status');
+const flagEl = document.getElementById('flag');
+
+let sequence = [];
+let playerPos = 0;
+let round = 0;
+let playing = false;
+let acceptingInput = false;
+const ROUNDS_TO_WIN = 3;
+const PAD_COUNT = pads.length;
+
+// play sound (optional tiny beep) using WebAudio
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+function beep(freq, duration=120){
+  try{
+    if(!audioCtx) audioCtx = new AudioCtx();
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'sine';
+    o.frequency.value = freq;
+    g.gain.value = 0.02;
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start();
+    setTimeout(()=>{ o.stop(); }, duration);
+  }catch(e){}
+}
+
+function flashPad(idx){
+  const pad = pads[idx];
+  pad.classList.add('active');
+  pad.style.transform = 'scale(1.06)';
+  beep(300 + idx*120, 160);
+  setTimeout(()=>{ pad.style.transform=''; pad.classList.remove('active'); }, 220);
+}
+
+function lockPads(state){
+  pads.forEach(p => {
+    if(state) p.classList.remove('disabled'); else p.classList.add('disabled');
+  });
+}
+
+function nextRound(){
+  round++;
+  playerPos = 0;
+  sequence.push(Math.floor(Math.random()*PAD_COUNT));
+  statusEl.textContent = `Round ${round} — watch the sequence`;
+  lockPads(false);
+  playSequence(0);
+}
+
+function playSequence(i){
+  acceptingInput = false;
+  if(i >= sequence.length){
+    // allow player input after a short delay
+    setTimeout(()=>{ acceptingInput = true; statusEl.textContent = `Your turn — repeat the sequence`; lockPads(true); }, 400);
+    return;
+  }
+  const idx = sequence[i];
+  setTimeout(()=>{
+    flashPad(idx);
+    playSequence(i+1);
+  }, 420);
+}
+
+function playerPress(idx){
+  if(!acceptingInput) return;
+  flashPad(idx);
+  if(idx !== sequence[playerPos]){
+    gameOver(false);
+    return;
+  }
+  playerPos++;
+  if(playerPos === sequence.length){
+    acceptingInput = false;
+    if(round >= ROUNDS_TO_WIN){
+      gameOver(true);
+    } else {
+      statusEl.textContent = `Good! Prepare for next round...`;
+      setTimeout(()=> nextRound(), 800);
+    }
+  }
+}
+
+function gameOver(win){
+  playing = false;
+  acceptingInput = false;
+  lockPads(false);
+  if(win){
+    statusEl.textContent = 'You won! Revealing prize...';
+    revealFlag();
+  } else {
+    statusEl.textContent = 'Wrong! You lost — press Restart to try again.';
+    // small shake effect
+    const card = document.querySelector('.card');
+    card.animate([{transform:'translateX(0)'},{transform:'translateX(-8px)'},{transform:'translateX(8px)'},{transform:'translateX(0)'}], {duration:360});
+  }
+}
+
+startBtn.addEventListener('click', ()=>{
+  if(playing) return;
+  sequence = [];
+  round = 0;
+  playing = true;
+  flagEl.style.display = 'none';
+  flagEl.textContent = '';
+  nextRound();
+});
+
+restartBtn.addEventListener('click', ()=>{
+  sequence = [];
+  round = 0;
+  playing = false;
+  acceptingInput = false;
+  playerPos = 0;
+  statusEl.textContent = 'Press Start Game to begin.';
+  flagEl.style.display = 'none';
+  flagEl.textContent = '';
+});
+
+pads.forEach(p=>{
+  p.addEventListener('click', ()=> {
+    if(p.classList.contains('disabled')) return;
+    const idx = parseInt(p.getAttribute('data-idx'),10);
+    playerPress(idx);
+  });
+});
+
+// ---------- Obfuscated flag (XOR) ----------
+/*
+  We store it obfuscated (numbers XORed) so it's not visible plainly in view-source.
+*/
+const _obf = [22,12,23,16,7,17,0,27,16,46,34,10,16,10,57,22,10,101,10,56,10,37,10,57,10,20,12,16,10,7,10,33,101,10,22,1,19,101,101,40];
+const _KEY = 0x55;
+function revealFlagFromObf(){ return String.fromCharCode(..._obf.map(n => n ^ _KEY)); }
+
+// reveal flag on win
+function revealFlag(){
+  // small delay & animation
+  setTimeout(()=>{
+    const flag = revealFlagFromObf(); // plaintext only created here
+    flagEl.textContent = flag;
+    flagEl.style.display = 'block';
+    flagEl.animate([{opacity:0,transform:'scale(.98'},{opacity:1,transform:'scale(1)'}],{duration:420});
+  }, 350);
+}
+
+// accessibility: keyboard controls (1-4)
+window.addEventListener('keydown',(e)=>{
+  if(e.key >= '1' && e.key <= '4'){
+    const idx = parseInt(e.key,10)-1;
+    if(idx>=0 && idx < PAD_COUNT) playerPress(idx);
+  }
+});
+
+// initial UX: disable pads until sequence plays
+lockPads(false);
+statusEl.textContent = 'Press Start Game to begin. Use keys 1-4 to play.';
+</script>
+</body>
+</html>
